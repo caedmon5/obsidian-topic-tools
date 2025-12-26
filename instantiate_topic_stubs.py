@@ -64,6 +64,18 @@ def iter_markdown_files(vault_root: Path, exclude_dirs: Set[Path]) -> Iterator[P
             continue
         yield p
 
+def build_vault_basename_index(
+    vault_root: Path, exclude_dirs: Set[Path]
+) -> dict[str, List[Path]]:
+    """
+    Map basename-without-extension -> list of matching markdown paths in the vault.
+    Used to determine whether [[Target]] is already instantiated anywhere.
+    """
+    idx: dict[str, List[Path]] = {}
+    for p in iter_markdown_files(vault_root, exclude_dirs=exclude_dirs):
+        stem = p.stem  # filename without .md
+        idx.setdefault(stem, []).append(p)
+    return idx
 
 def extract_topics_from_file(md_path: Path) -> Iterator[Tuple[str, int]]:
     """
@@ -237,6 +249,11 @@ def main() -> int:
             p = (vault_root / p)
         exclude_dirs.add(p.resolve())
 
+    # Vault-wide basename index (stem -> paths).
+    # NOTE: this must include *all* folders (including Topic Notes) because we use it
+    # to determine whether a target filename already exists anywhere in the vault.
+    vault_basename_index = build_vault_basename_index(vault_root)
+
     stamp = utc_now_stamp()
 
     findings: List[LinkFinding] = []
@@ -282,26 +299,40 @@ def main() -> int:
             )
             continue
 
+        # Does '<topic>.md' already exist anywhere in the vault?
+        matches = vault_basename_index.get(t, [])
+        if matches:
+            if len(matches) == 1:
+                actions.append(
+                    {
+                        "topic": t,
+                        "action": "instantiated",
+                        "path": str(matches[0]),
+                        "reason": "filename exists in vault",
+                    }
+                )
+            else:
+                actions.append(
+                    {
+                        "topic": t,
+                        "action": "instantiated_duplicate",
+                        "path": " | ".join(str(p) for p in matches),
+                        "reason": "multiple files share this basename in vault",
+                    }
+                )
+            continue
+
+        # Not instantiated anywhere: plan/perform creation in Topic Notes/
         target = topic_to_path(topics_dir, t)
-        if target.exists():
-            actions.append(
-                {
-                    "topic": t,
-                    "action": "exists",
-                    "path": str(target),
-                    "reason": "topic note already exists",
-                }
-            )
-        else:
-            to_create.append((t, target))
-            actions.append(
-                {
-                    "topic": t,
-                    "action": "create_planned" if not args.apply else "create",
-                    "path": str(target),
-                    "reason": "missing topic note",
-                }
-            )
+        to_create.append((t, target))
+        actions.append(
+            {
+                "topic": t,
+                "action": "create" if args.apply else "create_planned",
+                "path": str(target),
+                "reason": "missing file in vault",
+            }
+        )
 
     # Apply changes if requested
     created = 0
@@ -329,13 +360,13 @@ def main() -> int:
 
     # Console summary
     planned = len(to_create)
-    existing = sum(1 for a in actions if a["action"] == "exists")
+    instantiated = sum(1 for a in actions if a["action"] in ("instantiated", "instantiated_duplicate"))
     invalid_n = len(invalid)
 
     mode = "APPLY" if args.apply else "DRY-RUN"
     print(f"[{mode}] Vault scanned: {scanned} markdown files")
     print(f"[{mode}] Unique topics found: {len(unique_topics)}")
-    print(f"[{mode}] Existing topic notes: {existing}")
+    print(f"[{mode}] Instantiated targets (anywhere in vault): {instantiated}")
     print(f"[{mode}] Invalid topics skipped: {invalid_n}")
     if args.apply:
         print(f"[{mode}] Topic stubs created: {created}")
