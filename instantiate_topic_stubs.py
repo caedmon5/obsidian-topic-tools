@@ -249,10 +249,9 @@ def main() -> int:
             p = (vault_root / p)
         exclude_dirs.add(p.resolve())
 
-    # Vault-wide basename index (stem -> paths).
-    # NOTE: this must include *all* folders (including Topic Notes) because we use it
-    # to determine whether a target filename already exists anywhere in the vault.
-    vault_basename_index = build_vault_basename_index(vault_root)
+    # Build a vault-wide basename index for existence checks.
+    # Do NOT reuse exclude_dirs here: we want to know if '<target>.md' exists anywhere.
+    vault_basename_index = build_vault_basename_index(vault_root, exclude_dirs=set())
 
     stamp = utc_now_stamp()
 
